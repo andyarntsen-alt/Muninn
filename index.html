@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="no">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Muninn · AI som husker deg</title>
+  <meta name="description" content="Personlig AI med ekte hukommelse. Open source. Kjører lokalt. Dine data.">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%90%A6%3C/text%3E%3C/svg%3E">
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Space+Grotesk:wght@300;400;500;600;700&display=swap');
+
+    *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+
+    :root{
+      --gold:#c9a84c;--gold-dim:#8a6f2e;
+      --green:#4ade80;--red:#f87171;--orange:#fb923c;
+      --bg:#000;--bg-card:#0a0a0f;
+      --text:#e8e8e8;--text-dim:#7a7a8a;--border:#1a1a2a;
+      --mono:'JetBrains Mono',monospace;--sans:'Space Grotesk',sans-serif;
+    }
+
+    html{scroll-behavior:smooth}
+    body{background:var(--bg);color:var(--text);font-family:var(--sans);overflow-x:hidden;-webkit-font-smoothing:antialiased}
+
+    /* PRELOADER */
+    #preloader{position:fixed;inset:0;z-index:9999;background:#000;display:flex;align-items:center;justify-content:center;transition:opacity .6s ease}
+    #preloader.done{opacity:0;pointer-events:none}
+    .preloader-ring{stroke-dasharray:251;stroke-dashoffset:251;animation:ring-draw 1.2s ease forwards}
+    .preloader-dot{opacity:0;animation:dot-fade .4s .6s ease forwards}
+    @keyframes ring-draw{to{stroke-dashoffset:0}}
+    @keyframes dot-fade{to{opacity:1}}
+    .preloader-bar{width:100px;height:2px;background:#1a1a1a;margin:1.2rem auto 0;overflow:hidden}
+    .preloader-bar-fill{width:0;height:100%;background:var(--gold);animation:bar-fill 1.4s ease forwards}
+    @keyframes bar-fill{to{width:100%}}
+
+    /* NAV */
+    nav{position:fixed;top:0;left:0;right:0;z-index:1000;display:flex;align-items:center;justify-content:space-between;padding:1rem 2.5rem;background:rgba(0,0,0,.9);backdrop-filter:blur(20px);border-bottom:1px solid rgba(201,168,76,.1)}
+    .logo{font-family:var(--sans);font-weight:600;font-size:1.1rem;color:white;text-decoration:none;letter-spacing:.02em}
+    .logo span{color:var(--gold)}
+    .nav-right{display:flex;align-items:center;gap:1rem}
+    .nav-link{color:var(--text-dim);text-decoration:none;font-size:.82rem;font-weight:500;transition:color .2s}
+    .nav-link:hover{color:white}
+    .nav-btn{font-family:var(--sans);font-size:.82rem;font-weight:500;padding:.55rem 1.4rem;background:white;color:#000;border:none;cursor:pointer;transition:all .3s;text-decoration:none}
+    .nav-btn:hover{background:var(--gold)}
+
+    /* HERO */
+    .hero{min-height:100vh;display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden;background:linear-gradient(180deg,#000 0%,#050510 50%,#0a0a1a 100%)}
+    .hero-bg{position:absolute;inset:0;background:radial-gradient(ellipse 80% 60% at 50% 40%,rgba(201,168,76,.06) 0%,transparent 70%)}
+    .hero::before{content:'';position:absolute;inset:0;background-image:radial-gradient(rgba(201,168,76,.07) 1px,transparent 1px);background-size:32px 32px;mask-image:radial-gradient(ellipse 50% 50% at 50% 50%,black 20%,transparent 70%)}
+    .hero-content{position:relative;z-index:2;text-align:center;padding:2rem;max-width:860px}
+    .hero-label{font-family:var(--mono);font-size:.7rem;letter-spacing:.35em;color:var(--gold);margin-bottom:2rem;text-transform:uppercase}
+    .hero-title{font-size:clamp(2.4rem,6vw,4.2rem);font-weight:700;line-height:1.1;margin-bottom:1.5rem;letter-spacing:-.02em}
+    .hero-title .accent{color:var(--gold)}
+    .hero-sub{font-size:1.05rem;color:var(--text-dim);max-width:560px;margin:0 auto 2.5rem;line-height:1.8}
+    .hero-cta{display:flex;gap:1rem;justify-content:center;flex-wrap:wrap}
+    .btn-primary{font-family:var(--sans);font-size:.85rem;font-weight:500;padding:.85rem 2.2rem;background:white;color:#000;border:none;cursor:pointer;text-decoration:none;transition:all .3s}
+    .btn-primary:hover{background:var(--gold)}
+    .btn-ghost{font-family:var(--sans);font-size:.85rem;font-weight:500;padding:.85rem 2.2rem;background:transparent;color:var(--text-dim);border:1px solid var(--border);cursor:pointer;text-decoration:none;transition:all .3s}
+    .btn-ghost:hover{border-color:rgba(255,255,255,.3);color:white}
+
+    /* TRUST BAR */
+    .trust-bar{padding:2.5rem 2rem;border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+    .trust-row{display:flex;justify-content:center;gap:1.5rem;flex-wrap:wrap}
+    .trust-badge{font-family:var(--mono);font-size:.62rem;letter-spacing:.12em;padding:.5rem 1rem;border:1px solid var(--border);color:var(--text-dim);text-transform:uppercase;transition:all .3s}
+    .trust-badge.gold{border-color:rgba(201,168,76,.3);color:var(--gold)}
+    .trust-badge.live{border-color:rgba(74,222,128,.3);color:var(--green)}
+
+    /* MISSION */
+    .mission{padding:7rem 2rem;display:flex;align-items:center;justify-content:center;background:#fafafa}
+    .mission-text{font-size:clamp(1.2rem,2.8vw,2rem);font-weight:400;line-height:1.6;max-width:800px;color:#111;text-align:center}
+    .mission-text strong{font-weight:600}
+
+    /* DEMO */
+    .demo-section{padding:6rem 2.5rem;max-width:900px;margin:0 auto}
+    .section-header{text-align:center;margin-bottom:3rem}
+    .section-label{font-family:var(--mono);font-size:.7rem;letter-spacing:.25em;color:var(--gold);margin-bottom:.75rem;text-transform:uppercase}
+    .section-title{font-size:clamp(1.6rem,3.5vw,2.4rem);font-weight:600;line-height:1.2;margin-bottom:1rem;letter-spacing:-.01em}
+    .section-desc{color:var(--text-dim);font-size:.95rem;max-width:500px;margin:0 auto;line-height:1.8}
+
+    .terminal{background:#0d0d14;border:1px solid var(--border);border-radius:8px;overflow:hidden;box-shadow:0 0 60px rgba(201,168,76,.06),0 20px 60px rgba(0,0,0,.4)}
+    .terminal-bar{background:#1a1a24;padding:.7rem 1rem;display:flex;align-items:center;gap:.5rem}
+    .terminal-dot{width:10px;height:10px;border-radius:50%}
+    .terminal-dot.r{background:#ff5f57}.terminal-dot.y{background:#febc2e}.terminal-dot.g{background:#28c840}
+    .terminal-title{font-family:var(--mono);font-size:.6rem;color:var(--text-dim);margin-left:.5rem}
+    .terminal-body{padding:1.25rem;font-family:var(--mono);font-size:.72rem;line-height:1.9;min-height:280px}
+    .t-prompt{color:var(--green)}.t-cmd{color:var(--text)}.t-out{color:var(--text-dim)}.t-gold{color:var(--gold)}.t-ok{color:var(--green)}.t-warn{color:var(--orange)}.t-mem{color:var(--gold);font-style:italic}
+    .cursor-blink{display:inline-block;width:2px;height:1em;background:var(--gold);vertical-align:text-bottom;animation:blink 1s step-end infinite}
+    @keyframes blink{50%{opacity:0}}
+
+    /* HOW */
+    .how-section{padding:6rem 2.5rem;background:#fafafa}
+    .how-section .section-label{color:#8a6f2e;text-align:center}
+    .how-section .section-title{color:#111;text-align:center}
+    .how-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:2rem;max-width:1000px;margin:2.5rem auto 0}
+    .how-card{text-align:center;padding:2.5rem 1.5rem;border:1px solid #e0e0e0;background:white;transition:all .3s ease}
+    .how-card:hover{border-color:var(--gold);transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.08)}
+    .how-num{font-family:var(--mono);font-size:2rem;font-weight:700;color:var(--gold);opacity:.4;margin-bottom:1rem}
+    .how-card h3{font-size:1rem;font-weight:600;margin-bottom:.5rem;color:#111}
+    .how-card p{font-size:.85rem;color:#666;line-height:1.7}
+    .how-cmd{display:block;font-family:var(--mono);font-size:.72rem;background:#f0ede4;color:#5a4a1e;padding:.6rem .9rem;margin:.8rem 0;text-align:left;border-left:2px solid var(--gold);line-height:1.7}
+
+    /* FEATURES */
+    .features-section{padding:6rem 2.5rem}
+    .features-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:1.5rem;max-width:1000px;margin:2.5rem auto 0}
+    .feature-card{padding:2rem 1.5rem;border:1px solid var(--border);transition:border-color .3s;text-align:center}
+    .feature-card:hover{border-color:var(--gold-dim);box-shadow:0 0 30px rgba(201,168,76,.05)}
+    .feature-icon{font-size:1.5rem;margin-bottom:1rem}
+    .feature-card h3{font-family:var(--mono);font-size:.85rem;margin-bottom:.5rem}
+    .feature-card p{color:var(--text-dim);font-size:.82rem;line-height:1.7}
+
+    /* CTA */
+    .cta-section{padding:8rem 2.5rem;text-align:center;border-top:1px solid var(--border)}
+    .cta-section h2{font-size:clamp(1.8rem,4vw,3rem);font-weight:600;line-height:1.2;margin-bottom:1.5rem;letter-spacing:-.02em}
+    .cta-section p{color:var(--text-dim);font-size:1rem;max-width:500px;margin:0 auto 2.5rem;line-height:1.8}
+
+    /* FOOTER */
+    footer{padding:3rem 2.5rem;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;max-width:1000px;margin:0 auto}
+    footer .f-left{font-family:var(--mono);font-size:.65rem;color:var(--text-dim);letter-spacing:.08em}
+    footer a{color:var(--gold);text-decoration:none}
+
+    /* REVEAL */
+    .reveal{opacity:0;transform:translateY(25px);transition:opacity .7s ease,transform .7s ease}
+    .reveal.visible{opacity:1;transform:translateY(0)}
+    .reveal-delay-1{transition-delay:.15s}.reveal-delay-2{transition-delay:.3s}
+
+    /* RESPONSIVE */
+    @media(max-width:768px){
+      nav{padding:.75rem 1.25rem}
+      .hero-content{padding:1.5rem}
+      .hero-cta{flex-direction:column;align-items:center}
+      .btn-primary,.btn-ghost{width:100%;text-align:center}
+      .how-grid,.features-grid{grid-template-columns:1fr}
+      .trust-row{gap:.75rem}
+      .trust-badge{font-size:.58rem;padding:.4rem .7rem}
+      footer{flex-direction:column;gap:1rem;text-align:center}
+      .terminal-body{font-size:.62rem;min-height:240px}
+      .nav-link{display:none}
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Preloader -->
+  <div id="preloader">
+    <div style="text-align:center">
+      <svg width="50" height="50" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="50" cy="50" r="40" stroke="white" stroke-width="2.5" fill="none" class="preloader-ring"/>
+        <circle cx="50" cy="50" r="5" fill="white" class="preloader-dot"/>
+      </svg>
+      <div class="preloader-bar"><div class="preloader-bar-fill"></div></div>
+    </div>
+  </div>
+
+  <!-- Nav -->
+  <nav>
+    <a href="#" class="logo"><span>Muninn</span></a>
+    <div class="nav-right">
+      <a href="#demo" class="nav-link">Demo</a>
+      <a href="#hvordan" class="nav-link">Hvordan</a>
+      <a href="https://github.com/andyarntsen/muninn" target="_blank" class="nav-btn">GitHub ↗</a>
+    </div>
+  </nav>
+
+  <!-- ═══ HERO ═══ -->
+  <section class="hero">
+    <div class="hero-bg"></div>
+    <div class="hero-content">
+      <div class="hero-label">OPEN SOURCE &middot; MIT-LISENS</div>
+      <h1 class="hero-title">
+        AI som faktisk<br><span class="accent">husker deg</span>
+      </h1>
+      <p class="hero-sub">
+        En personlig AI som kjenner deg over tid. Husker hva du har sagt, utvikler seg, og lever på din maskin. Ikke i skyen.
+      </p>
+      <div class="hero-cta">
+        <a href="https://github.com/andyarntsen/muninn" target="_blank" class="btn-primary">Installer fra GitHub</a>
+        <a href="#demo" class="btn-ghost">Se demo ↓</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ TRUST ═══ -->
+  <div class="trust-bar">
+    <div class="trust-row">
+      <div class="trust-badge gold">CLAUDE AGENT SDK</div>
+      <div class="trust-badge gold">30+ VERKTØY</div>
+      <div class="trust-badge live">TELEGRAM [LIVE]</div>
+      <div class="trust-badge">100% LOKALT</div>
+      <div class="trust-badge">5 RELASJONSFASER</div>
+    </div>
+  </div>
+
+  <!-- ═══ MISSION ═══ -->
+  <section class="mission">
+    <p class="mission-text reveal">
+      Andre AI-er glemmer deg mellom hver samtale. Muninn gjør ikke det. Han <strong>bygger en forståelse av hvem du er</strong>, hva du jobber med, hva du bryr deg om, og bruker det til å møte deg der du faktisk er. <strong>Ikke der du var sist.</strong>
+    </p>
+  </section>
+
+  <!-- ═══ DEMO ═══ -->
+  <section class="demo-section" id="demo">
+    <div class="section-header reveal">
+      <div class="section-label">SE DET I AKSJON</div>
+      <div class="section-title">Hukommelse som faktisk virker</div>
+      <div class="section-desc">Muninn husker fakta, utvikler personlighet, og holder oversikt over tid.</div>
+    </div>
+
+    <div class="terminal reveal">
+      <div class="terminal-bar">
+        <div class="terminal-dot r"></div>
+        <div class="terminal-dot y"></div>
+        <div class="terminal-dot g"></div>
+        <span class="terminal-title">muninn · terminal-chat</span>
+      </div>
+      <div class="terminal-body" id="term-body">
+        <div><span class="t-prompt">you›</span> <span class="t-cmd" id="t-cmd"></span><span class="cursor-blink" id="t-cursor"></span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ HOW ═══ -->
+  <section class="how-section" id="hvordan">
+    <div class="section-header">
+      <div class="section-label">HVORDAN DET FUNGERER</div>
+      <div class="section-title" style="color:#111">Tre steg. Ti minutter.</div>
+    </div>
+    <div class="how-grid">
+      <div class="how-card reveal">
+        <div class="how-num">01</div>
+        <h3>Klon og bygg</h3>
+        <code class="how-cmd">git clone github.com/andyarntsen/muninn<br>npm install && npm run build</code>
+        <p>Krever Node.js 18+ og Claude CLI.</p>
+      </div>
+      <div class="how-card reveal reveal-delay-1">
+        <div class="how-num">02</div>
+        <h3>Kjør setup</h3>
+        <code class="how-cmd">npm run setup</code>
+        <p>Interaktiv veiviser. Kobler Telegram, setter opp AI-backend. Ferdig.</p>
+      </div>
+      <div class="how-card reveal reveal-delay-2">
+        <div class="how-num">03</div>
+        <h3>Snakk</h3>
+        <code class="how-cmd">npm start</code>
+        <p>Terminal eller Telegram. Han husker alt fra dag én.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ FEATURES ═══ -->
+  <section class="features-section">
+    <div class="section-header">
+      <div class="section-label">HVA DU FÅR</div>
+      <div class="section-title">Bygget for å kjenne deg</div>
+    </div>
+    <div class="features-grid">
+      <div class="feature-card reveal">
+        <div class="feature-icon">◈</div>
+        <h3>Vedvarende minne</h3>
+        <p>Fakta, preferanser og kontekst lagres lokalt. Overlever mellom samtaler.</p>
+      </div>
+      <div class="feature-card reveal reveal-delay-1">
+        <div class="feature-icon">◇</div>
+        <h3>Selvrefleksjon</h3>
+        <p>Reflekterer over seg selv og utvikler personlighet. Fra fremmed til soul-linked.</p>
+      </div>
+      <div class="feature-card reveal reveal-delay-2">
+        <div class="feature-icon">◉</div>
+        <h3>Policy Engine</h3>
+        <p>Alle verktøy styres av regler. Farlige handlinger krever godkjenning.</p>
+      </div>
+      <div class="feature-card reveal">
+        <div class="feature-icon">◆</div>
+        <h3>30+ verktøy</h3>
+        <p>Filer, shell, Git, nettleser, clipboard, påminnelser. Alt med sikkerhetskontroll.</p>
+      </div>
+      <div class="feature-card reveal reveal-delay-1">
+        <div class="feature-icon">◌</div>
+        <h3>Telegram + Terminal</h3>
+        <p>Chat fra telefonen eller terminalen. Samme hjerne, samme hukommelse.</p>
+      </div>
+      <div class="feature-card reveal reveal-delay-2">
+        <div class="feature-icon">◎</div>
+        <h3>100% dine data</h3>
+        <p>Alt lagres på din maskin. Ingen sky. Slett når som helst.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ CTA ═══ -->
+  <section class="cta-section">
+    <h2 class="reveal">Klar for en AI<br>som kjenner deg?</h2>
+    <p class="reveal reveal-delay-1">Open source. Gratis. Ti minutter.<br>Hukommelsen varer for alltid.</p>
+    <a href="https://github.com/andyarntsen/muninn" target="_blank" class="btn-primary reveal reveal-delay-2">Installer fra GitHub</a>
+  </section>
+
+  <!-- ═══ FOOTER ═══ -->
+  <footer>
+    <div class="f-left">MUNINN &middot; BYGGET AV <a href="https://github.com/andyarntsen">ANDY</a> & CLAUDE &middot; 2026</div>
+  </footer>
+
+<script>
+  // Preloader
+  window.addEventListener('load',()=>{
+    setTimeout(()=>{
+      document.getElementById('preloader').classList.add('done');
+      setTimeout(()=>document.getElementById('preloader').remove(),600);
+    },1600);
+  });
+
+  // Reveal on scroll
+  const obs=new IntersectionObserver(e=>{e.forEach(x=>{if(x.isIntersecting){x.target.classList.add('visible');obs.unobserve(x.target)}})},{threshold:.12});
+  document.querySelectorAll('.reveal').forEach(el=>obs.observe(el));
+
+  // Terminal demo
+  const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+  const conversation=[
+    {who:'you',text:'Hei Muninn, husker du hva jeg jobber med?'},
+    {who:'muninn',lines:[
+      {t:'mem',v:'→ Husker: du jobber som utvikler hos Iterate'},
+      {t:'mem',v:'→ Husker: du holder på med en React-migrering'},
+      {t:'mem',v:'→ Husker: deadline er 15. mars'},
+      {t:'br'},
+      {t:'out',v:'Ja! Du er utvikler hos Iterate og holder på med en React-'},
+      {t:'out',v:'migrering. Fristen er 15. mars, 3 uker igjen.'},
+      {t:'out',v:'Hvordan går det? Sist sa du at API-laget var ferdig.'},
+    ]},
+    {who:'you',text:'Spot on. Kan du sjekke om det er nye issues i repoet?'},
+    {who:'muninn',lines:[
+      {t:'out',v:'Sjekker GitHub...'},
+      {t:'br'},
+      {t:'gold',v:'3 nye issues siden sist:'},
+      {t:'ok',v:'  #142  Fix date picker locale  (assigned: deg)'},
+      {t:'warn',v:'  #143  Memory leak i dashboard  (critical, unassigned)'},
+      {t:'out',v:'  #144  Update README badges  (low priority)'},
+      {t:'br'},
+      {t:'out',v:'#143 ser alvorlig ut. Vil du at jeg åpner filen og ser'},
+      {t:'out',v:'på koden?'},
+    ]},
+    {who:'you',text:'Ja, og sett en påminnelse om å oppdatere README i morgen.'},
+    {who:'muninn',lines:[
+      {t:'ok',v:'✓ Påminnelse satt: "Oppdater README badges" → i morgen 09:00'},
+      {t:'br'},
+      {t:'out',v:'Åpner src/dashboard/Dashboard.tsx...'},
+      {t:'out',v:'Fant mulig leak: useEffect mangler cleanup på linje 47.'},
+      {t:'out',v:'Skal jeg lage en fix og committe?'},
+    ]},
+  ];
+
+  async function runDemo(){
+    const body=document.getElementById('term-body');
+    const cmdEl=document.getElementById('t-cmd');
+    const cursorEl=document.getElementById('t-cursor');
+
+    for(const msg of conversation){
+      if(msg.who==='you'){
+        cmdEl.textContent='';
+        cursorEl.style.display='inline-block';
+        await sleep(400);
+        for(let i=0;i<msg.text.length;i++){
+          cmdEl.textContent+=msg.text[i];
+          await sleep(20+Math.random()*15);
+        }
+        await sleep(300);
+        cursorEl.style.display='none';
+        // Move prompt to history
+        const hist=document.createElement('div');
+        hist.innerHTML=`<span class="t-prompt">you›</span> <span class="t-cmd">${msg.text}</span>`;
+        body.insertBefore(hist,body.lastElementChild);
+        cmdEl.textContent='';
+        body.appendChild(document.createElement('br'));
+      }else{
+        const dots=document.createElement('div');
+        dots.style.color='var(--text-dim)';
+        body.insertBefore(dots,body.lastElementChild);
+        for(let i=0;i<3;i++){dots.textContent+='.';await sleep(250)}
+        body.removeChild(dots);
+
+        const muninn=document.createElement('div');
+        muninn.innerHTML='<span class="t-gold">muninn›</span>';
+        body.insertBefore(muninn,body.lastElementChild);
+
+        for(const ln of msg.lines){
+          const el=document.createElement('div');
+          el.style.paddingLeft='1rem';
+          switch(ln.t){
+            case'br':el.innerHTML='<br>';break;
+            case'out':el.innerHTML=`<span class="t-out">${ln.v}</span>`;break;
+            case'gold':el.innerHTML=`<span class="t-gold">${ln.v}</span>`;break;
+            case'ok':el.innerHTML=`<span class="t-ok">${ln.v}</span>`;break;
+            case'warn':el.innerHTML=`<span class="t-warn">${ln.v}</span>`;break;
+            case'mem':el.innerHTML=`<span class="t-mem">${ln.v}</span>`;break;
+          }
+          el.style.opacity='0';el.style.transform='translateY(3px)';el.style.transition='opacity .2s,transform .2s';
+          body.insertBefore(el,body.lastElementChild);
+          body.scrollTop=body.scrollHeight;
+          await sleep(10);
+          el.style.opacity='1';el.style.transform='translateY(0)';
+          await sleep(ln.t==='br'?20:55);
+        }
+        body.insertBefore(document.createElement('br'),body.lastElementChild);
+        await sleep(600);
+      }
+    }
+    // Final cursor
+    cursorEl.style.display='inline-block';
+  }
+
+  // Start demo when visible
+  const demoObs=new IntersectionObserver(entries=>{
+    if(entries[0].isIntersecting){runDemo();demoObs.disconnect()}
+  },{threshold:.3});
+  demoObs.observe(document.getElementById('term-body'));
+</script>
+
+</body>
+</html>

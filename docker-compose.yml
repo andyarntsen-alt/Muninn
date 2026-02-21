@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  muninn:
+    build: .
+    container_name: muninn
+    restart: unless-stopped
+    volumes:
+      - ./data:/data
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+    # Run init first: docker compose run muninn node dist/cli/index.js init --data-dir /data

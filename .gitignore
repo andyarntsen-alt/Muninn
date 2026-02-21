@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+*.tgz
+
+# Muninn data (don't commit your personal data)
+.muninn/

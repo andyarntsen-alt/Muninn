@@ -1,0 +1,19 @@
+{
+  "name": "weather",
+  "version": "1.0.0",
+  "description": "Get weather information for any city",
+  "author": "Muninn Community",
+  "tools": [
+    {
+      "name": "get_weather",
+      "description": "Get the current weather for a city. Use when the user asks about weather.",
+      "parameters": {
+        "city": {
+          "type": "string",
+          "description": "The city to get weather for"
+        }
+      },
+      "command": "index.mjs"
+    }
+  ]
+}
