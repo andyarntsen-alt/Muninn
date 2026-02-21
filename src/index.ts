@@ -22,25 +22,15 @@ import { ApprovalManager } from './telegram/approval.js';
 import { initializeTools } from './tools/index.js';
 
 /** Turn reflection insights into a natural message worth sharing */
-async function generateShareableInsight(soulName: string, insights: string[], language: string = 'no'): Promise<string | null> {
+async function generateShareableInsight(rawSoul: string, insights: string[]): Promise<string | null> {
   try {
     const text = await generateCheapResponse({
-      prompt: `You are ${soulName}. During your reflection, you discovered these insights:
+      prompt: `Here is who you are:\n\n${rawSoul}\n\nDuring your reflection, you discovered these insights:
 ${insights.map(i => `- ${i}`).join('\n')}
 
 If any of these are genuinely interesting or useful to share with your human, write a short, natural message (1-2 sentences). Frame it as a thought you had, not a report.
 
-If none are worth sharing (too generic, too meta, or just internal bookkeeping), respond with just "NONE".
-
-Examples of good messages:
-- "Jeg tenkte på noe. Du har snakket mye om [X] i det siste, men aldri nevnt [Y]. Bare nysgjerrig."
-- "Hei, noe slo meg: [observation]. Tenkte det var verdt å nevne."
-
-Examples of NOT worth sharing:
-- "I noticed the user prefers Norwegian" (boring metadata)
-- "Interaction count has increased" (internal bookkeeping)
-
-${language === 'no' ? 'Write in Norwegian.' : 'Write in English.'}`,
+If none are worth sharing (too generic, too meta, or just internal bookkeeping), respond with just "NONE".`,
     });
     if (!text || text.trim().toUpperCase() === 'NONE') return null;
     return text;
@@ -223,8 +213,8 @@ export async function startMimir(dataDir: string): Promise<void> {
       const result = await runtime.maybeReflect();
       // If reflection produced insights worth sharing, send them
       if (result && result.insights && result.insights.length > 0) {
-        const soulData = await soul.getSoul();
-        const shareableInsight = await generateShareableInsight(soulData.name, result.insights, config.language);
+        const rawSoul = await soul.getRawSoul();
+        const shareableInsight = await generateShareableInsight(rawSoul, result.insights);
         if (shareableInsight) {
           for (const userId of config.allowedUsers) {
             await bot.sendMessage(userId, shareableInsight);
