@@ -93,6 +93,7 @@ export class MemoryEngine {
     }
 
     this.facts.push(fact);
+    this.preferencesCache = null;
     await this.persistFacts();
 
     return fact;
@@ -116,6 +117,7 @@ export class MemoryEngine {
     }
 
     if (count > 0) {
+      this.preferencesCache = null;
       await this.persistFacts();
       console.log(`[Mimir Memory] Invalidated ${count} facts matching "${query}"`);
     }
@@ -151,6 +153,83 @@ export class MemoryEngine {
       .filter(f => f.invalidAt === null)
       .sort((a, b) => new Date(b.validAt).getTime() - new Date(a.validAt).getTime())
       .slice(0, limit);
+  }
+
+  // Stopwords filtered from search queries (Norwegian + English)
+  private static STOPWORDS = new Set([
+    'jeg', 'du', 'han', 'hun', 'det', 'den', 'vi', 'de', 'er', 'var', 'har', 'kan',
+    'vil', 'skal', 'med', 'som', 'for', 'til', 'fra', 'om', 'på', 'men', 'hva',
+    'the', 'is', 'are', 'was', 'has', 'can', 'will', 'with', 'for', 'from', 'about',
+    'and', 'but', 'not', 'this', 'that', 'what', 'how', 'why', 'who', 'when',
+  ]);
+
+  /**
+   * Search facts by relevance to a query.
+   * Scoring: keyword match (0.5) + bigram match (0.2) + recency (0.2) + confidence (0.1)
+   * Filters stopwords, boosts subject matches, uses bigrams for phrase-level matching.
+   */
+  async searchRelevantFacts(query: string, limit: number = 15): Promise<Fact[]> {
+    const allWords = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+    const words = allWords.filter(w => !MemoryEngine.STOPWORDS.has(w));
+    if (words.length === 0) return this.getRecentFacts(limit);
+
+    // Build bigrams for phrase matching ("feeling stressed" → "feeling stressed")
+    const bigrams: string[] = [];
+    for (let i = 0; i < words.length - 1; i++) {
+      bigrams.push(`${words[i]} ${words[i + 1]}`);
+    }
+
+    const validFacts = this.facts.filter(f => f.invalidAt === null);
+    const now = Date.now();
+    const maxAge = 90 * 24 * 60 * 60 * 1000;
+
+    const scored = validFacts.map(f => {
+      const fullText = `${f.subject} ${f.predicate} ${f.object} ${f.context || ''}`.toLowerCase();
+      const subjectText = f.subject.toLowerCase();
+
+      // Keyword match (0.5) — bonus for subject matches
+      const matchCount = words.filter(w => fullText.includes(w)).length;
+      const subjectMatches = words.filter(w => subjectText.includes(w)).length;
+      const keywordScore = words.length > 0
+        ? (matchCount + subjectMatches * 0.5) / (words.length * 1.5)
+        : 0;
+
+      // Bigram match (0.2) — rewards phrase-level overlap
+      const bigramMatches = bigrams.filter(bg => fullText.includes(bg)).length;
+      const bigramScore = bigrams.length > 0 ? bigramMatches / bigrams.length : 0;
+
+      // Recency (0.2)
+      const age = now - new Date(f.validAt).getTime();
+      const recencyScore = Math.max(0, 1 - age / maxAge);
+
+      // Confidence boost (0.1) — prefer high-confidence facts
+      const confidenceScore = f.confidence;
+
+      const total = keywordScore * 0.5 + bigramScore * 0.2 + recencyScore * 0.2 + confidenceScore * 0.1;
+      return { fact: f, score: total };
+    });
+
+    return scored
+      .filter(s => s.score > 0.05)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit)
+      .map(s => s.fact);
+  }
+
+  /** Get preference facts (cached, refreshed on fact changes) */
+  private preferencesCache: Fact[] | null = null;
+  private static PREF_KEYWORDS = ['prefers', 'prefer', "don't", "doesn't", 'ikke', 'vil ikke', 'liker ikke', 'wants', 'always', 'never'];
+
+  async getPreferences(limit: number = 10): Promise<Fact[]> {
+    if (!this.preferencesCache) {
+      this.preferencesCache = this.facts.filter(f =>
+        f.invalidAt === null &&
+        MemoryEngine.PREF_KEYWORDS.some(kw =>
+          f.predicate.toLowerCase().includes(kw) || f.object.toLowerCase().includes(kw)
+        )
+      );
+    }
+    return this.preferencesCache.slice(0, limit);
   }
 
   /** Get all facts (including invalidated) for reflection */
@@ -227,9 +306,13 @@ export class MemoryEngine {
     return newEntity;
   }
 
-  /** Get all entities */
-  async getEntities(): Promise<Entity[]> {
-    return [...this.entities.values()];
+  /** Get entities, optionally limited to most recently seen */
+  async getEntities(limit?: number): Promise<Entity[]> {
+    const all = [...this.entities.values()];
+    if (!limit) return all;
+    return all
+      .sort((a, b) => new Date(b.lastSeen).getTime() - new Date(a.lastSeen).getTime())
+      .slice(0, limit);
   }
 
   /** Find an entity by name */

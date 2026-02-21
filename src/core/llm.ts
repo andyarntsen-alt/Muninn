@@ -68,3 +68,39 @@ export async function generateResponse(options: GenerateOptions): Promise<string
 export async function generateCheapResponse(options: Omit<GenerateOptions, 'model'>): Promise<string> {
   return generateResponse({ ...options, model: 'haiku' });
 }
+
+// ─── Model Router ─────────────────────────────────────────
+// Routes tasks to appropriate model tiers for cost efficiency.
+// Inspired by OpenClaw's multi-model strategy.
+
+export type TaskType =
+  | 'conversation'      // Main user-facing chat
+  | 'reflection'        // Periodic self-reflection
+  | 'fact_extraction'   // Background fact extraction
+  | 'proactive'         // Proactive message generation
+  | 'summarization';    // Conversation summarization
+
+const DEFAULT_MODEL_ROUTES: Record<TaskType, string> = {
+  conversation: 'sonnet',
+  reflection: 'sonnet',
+  fact_extraction: 'haiku',
+  proactive: 'haiku',
+  summarization: 'haiku',
+};
+
+let modelOverrides: Partial<Record<TaskType, string>> = {};
+
+/** Configure model routing overrides */
+export function setModelRoutes(overrides: Partial<Record<TaskType, string>>): void {
+  modelOverrides = { ...modelOverrides, ...overrides };
+}
+
+/** Get the model for a given task type */
+export function getModelForTask(task: TaskType): string {
+  return modelOverrides[task] || DEFAULT_MODEL_ROUTES[task];
+}
+
+/** Generate a response using the model appropriate for the task */
+export async function generateForTask(task: TaskType, options: Omit<GenerateOptions, 'model'>): Promise<string> {
+  return generateResponse({ ...options, model: getModelForTask(task) });
+}

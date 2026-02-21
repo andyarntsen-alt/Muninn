@@ -120,9 +120,9 @@ export class HuginnRuntime {
     const soul = await this.soul.getSoul();
     const systemPrompt = buildSystemPrompt({
       soul,
-      recentFacts: await this.memory.getRecentFacts(20),
-      allFacts: await this.memory.getAllFacts(),
-      entities: await this.memory.getEntities(),
+      relevantFacts: await this.memory.searchRelevantFacts(userMessage, 15),
+      preferences: await this.memory.getPreferences(10),
+      entities: await this.memory.getEntities(10),
       activeGoals: await this.goals.getActiveGoals(),
       config: this.config,
     }) + moodGuidance;
@@ -163,7 +163,7 @@ export class HuginnRuntime {
         this.lastSessionId = result.sessionId;
       }
 
-      return await this.finalizeResponse(result.text, userMessage);
+      return await this.finalizeResponse(result.text, userMessage, result.costUsd);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       console.error('[Huginn] Error generating response:', errorMessage);
@@ -187,6 +187,7 @@ export class HuginnRuntime {
         return await this.finalizeResponse(
           result.text || 'Beklager, noe gikk galt. Prøv igjen.',
           userMessage,
+          result.costUsd,
         );
       } catch (retryError) {
         const retryMsg = retryError instanceof Error ? retryError.message : 'Unknown error';
@@ -197,8 +198,8 @@ export class HuginnRuntime {
   }
 
   /** Finalize a response: save to conversation, extract facts, increment counter */
-  private async finalizeResponse(responseText: string, userMessage: string): Promise<string> {
-    this.rateLimiter.recordRequest();
+  private async finalizeResponse(responseText: string, userMessage: string, costUsd?: number): Promise<string> {
+    this.rateLimiter.recordRequest(costUsd || 0.01);
 
     const text = responseText.trim()
       ? responseText

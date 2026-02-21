@@ -7,12 +7,17 @@ import type { Soul, Fact, Entity, Goal, MimirConfig } from './types.js';
 
 export interface SystemPromptContext {
   soul: Soul;
-  recentFacts: Fact[];
-  allFacts: Fact[];
+  relevantFacts: Fact[];
+  preferences: Fact[];
   entities: Entity[];
   activeGoals: Goal[];
   config: MimirConfig;
 }
+
+const MAX_FACTS = 15;
+const MAX_ENTITIES = 10;
+const MAX_PREFERENCES = 10;
+const MAX_GOALS = 5;
 
 // ─── Language-aware prompt strings ───────────────────────
 
@@ -89,34 +94,33 @@ function getStrings(language: string): PromptStrings {
 
 /** Build the full system prompt from soul + memory context */
 export function buildSystemPrompt(ctx: SystemPromptContext): string {
-  const { soul, recentFacts, allFacts, entities, activeGoals, config } = ctx;
+  const { soul, relevantFacts, preferences, entities, activeGoals, config } = ctx;
   const s = getStrings(config.language);
 
-  const factsContext = recentFacts.length > 0
-    ? `\n\n${s.factsHeader}\n${recentFacts.map(f =>
+  const cappedFacts = relevantFacts.slice(0, MAX_FACTS);
+  const factsContext = cappedFacts.length > 0
+    ? `\n\n${s.factsHeader}\n${cappedFacts.map(f =>
         `- ${f.subject} ${f.predicate} ${f.object}${f.context ? ` (${f.context})` : ''}`
       ).join('\n')}`
     : '';
 
-  const entitiesContext = entities.length > 0
-    ? `\n\n${s.entitiesHeader}\n${entities.map(e =>
+  const cappedEntities = entities.slice(0, MAX_ENTITIES);
+  const entitiesContext = cappedEntities.length > 0
+    ? `\n\n${s.entitiesHeader}\n${cappedEntities.map(e =>
         `- ${e.name} (${e.type})${Object.keys(e.attributes).length > 0 ? ': ' + Object.entries(e.attributes).map(([k, v]) => `${k}=${v}`).join(', ') : ''}`
       ).join('\n')}`
     : '';
 
-  const prefKeywords = ['prefers', 'prefer', "don't", "doesn't", 'ikke', 'vil ikke', 'liker ikke', 'wants', 'always', 'never'];
-  const preferences = allFacts.filter(f =>
-    f.invalidAt === null &&
-    prefKeywords.some(kw => f.predicate.toLowerCase().includes(kw) || f.object.toLowerCase().includes(kw))
-  );
-  const preferencesContext = preferences.length > 0
-    ? `\n\n${s.preferencesHeader}\n${preferences.map(f =>
+  const cappedPrefs = preferences.slice(0, MAX_PREFERENCES);
+  const preferencesContext = cappedPrefs.length > 0
+    ? `\n\n${s.preferencesHeader}\n${cappedPrefs.map(f =>
         `- ${f.subject} ${f.predicate} ${f.object}`
       ).join('\n')}\n${s.preferencesFooter}`
     : '';
 
-  const goalsContext = activeGoals.length > 0
-    ? `\n\n${s.goalsHeader}\n${activeGoals.map(g => `- ${g.description}`).join('\n')}`
+  const cappedGoals = activeGoals.slice(0, MAX_GOALS);
+  const goalsContext = cappedGoals.length > 0
+    ? `\n\n${s.goalsHeader}\n${cappedGoals.map(g => `- ${g.description}`).join('\n')}`
     : '';
 
   const phaseInstructions = getPhaseInstructions(soul, config.language);

@@ -5,12 +5,37 @@
 // but perceiving that you perceive
 // ═══════════════════════════════════════════════════════════
 
+import { z } from 'zod';
 import type { MimirConfig, ReflectionResult, Fact, RelationshipPhase, Soul } from '../core/types.js';
-import { generateResponse } from '../core/llm.js';
+import { generateForTask } from '../core/llm.js';
 import type { MemoryEngine } from '../memory/memory-engine.js';
 import type { SoulManager } from '../identity/soul-manager.js';
 import type { GoalsManager } from '../identity/goals-manager.js';
 import { RelationshipManager } from '../identity/relationship.js';
+
+const VALID_PHASES = ['curious', 'learning', 'understanding', 'proactive'] as const;
+
+const ReflectionResponseSchema = z.object({
+  insights: z.array(z.string()).default([]),
+  newFacts: z.array(z.object({
+    subject: z.string().min(1).max(200),
+    predicate: z.string().min(1).max(200),
+    object: z.string().min(1).max(500),
+    confidence: z.number().min(0).max(1).default(0.6),
+  })).default([]),
+  updatedSoul: z.boolean().default(false),
+  soulChanges: z.object({
+    personality: z.array(z.string().max(200)).optional(),
+    values: z.array(z.string().max(200)).optional(),
+    communicationStyle: z.string().max(500).optional(),
+    boundaries: z.array(z.string().max(200)).optional(),
+    relationshipPhase: z.enum(VALID_PHASES).optional(),
+  }).nullable().default(null),
+  goalUpdates: z.object({
+    completed: z.array(z.string()).default([]),
+    new: z.array(z.string().max(300)).default([]),
+  }).optional(),
+});
 
 /**
  * The Reflector — periodic self-examination system.
@@ -54,10 +79,7 @@ export class Reflector {
     const prompt = this.buildReflectionPrompt(soul, recentFacts, summaries, allFacts, activeGoals);
 
     try {
-      const text = await generateResponse({
-        prompt,
-        model: this.config.model || 'sonnet',
-      });
+      const text = await generateForTask('reflection', { prompt });
 
       // Parse the reflection response
       const result = this.parseReflectionResponse(text);
@@ -215,44 +237,48 @@ Be thoughtful. Don't change your soul unless there's a genuine reason. Small, in
 
   /** Parse the reflection response into a structured result */
   private parseReflectionResponse(text: string): ReflectionResult {
+    const fallback: ReflectionResult = {
+      timestamp: new Date().toISOString(),
+      newFacts: [],
+      updatedSoul: false,
+      insights: [text.trim()],
+    };
+
     try {
       // Extract JSON from the response (it might be wrapped in markdown code blocks)
       const jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        return {
-          timestamp: new Date().toISOString(),
-          newFacts: [],
-          updatedSoul: false,
-          insights: [text.trim()],
-        };
+      if (!jsonMatch) return fallback;
+
+      const raw = JSON.parse(jsonMatch[0]);
+      const validated = ReflectionResponseSchema.safeParse(raw);
+
+      if (!validated.success) {
+        console.warn('[Reflector] Schema validation failed:', validated.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join(', '));
+        return fallback;
       }
 
-      const parsed = JSON.parse(jsonMatch[0]);
+      const parsed = validated.data;
 
       return {
         timestamp: new Date().toISOString(),
-        newFacts: (parsed.newFacts || []).map((f: any) => ({
+        newFacts: parsed.newFacts.map(f => ({
           id: '',
-          subject: f.subject || '',
-          predicate: f.predicate || '',
-          object: f.object || '',
+          subject: f.subject,
+          predicate: f.predicate,
+          object: f.object,
           validAt: new Date().toISOString(),
           invalidAt: null,
-          confidence: f.confidence || 0.6,
+          confidence: f.confidence,
           source: 'inference' as const,
         })),
-        updatedSoul: parsed.updatedSoul || false,
+        updatedSoul: parsed.updatedSoul,
         soulChanges: parsed.soulChanges ? JSON.stringify(parsed.soulChanges) : undefined,
-        insights: parsed.insights || [],
-        goalUpdates: parsed.goalUpdates || undefined,
+        insights: parsed.insights,
+        goalUpdates: parsed.goalUpdates,
       };
-    } catch {
-      return {
-        timestamp: new Date().toISOString(),
-        newFacts: [],
-        updatedSoul: false,
-        insights: [text.trim()],
-      };
+    } catch (error) {
+      console.warn('[Reflector] JSON parse failed:', error instanceof Error ? error.message : 'unknown');
+      return fallback;
     }
   }
 

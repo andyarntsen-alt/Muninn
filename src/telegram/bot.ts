@@ -399,6 +399,11 @@ export class MimirBot {
         return; // Message was consumed by the approval system
       }
 
+      // User responded — reset proactive backoff
+      if (this.proactive) {
+        this.proactive.recordUserResponse().catch(() => {});
+      }
+
       // Show typing indicator (refresh every 4s — Telegram's indicator expires after 5s)
       await ctx.replyWithChatAction('typing');
       const typingInterval = setInterval(() => {

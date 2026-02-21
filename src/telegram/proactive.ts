@@ -33,8 +33,12 @@ interface ProactiveState {
   lastGreeting: string | null;
   lastCheckIn: string | null;
   lastFollowUp: string | null;
+  lastTaskNudge: string | null;
+  lastInsight: string | null;
   lastDiscovery: string | null;
   suppressUntil: string | null;
+  proactivesSent: number;
+  consecutiveIgnored: number;
 }
 
 /**
@@ -72,8 +76,12 @@ export class ProactiveEngine {
       lastGreeting: null,
       lastCheckIn: null,
       lastFollowUp: null,
+      lastTaskNudge: null,
+      lastInsight: null,
       lastDiscovery: null,
       suppressUntil: null,
+      proactivesSent: 0,
+      consecutiveIgnored: 0,
     };
   }
 
@@ -88,10 +96,11 @@ export class ProactiveEngine {
     }
   }
 
-  /** Check if proactive messaging is available for current phase */
+  /** Check if proactive messaging is available — needs minimum engagement */
   private async isAvailable(): Promise<boolean> {
-    // Always available — Mimir reaches out from day one
-    return true;
+    const soul = await this.soul.getSoul();
+    // Require at least 5 interactions before any proactive messaging
+    return soul.interactionCount >= 5;
   }
 
   /** Check if messages are suppressed */
@@ -100,17 +109,29 @@ export class ProactiveEngine {
     return new Date(this.state.suppressUntil) > new Date();
   }
 
+  /** Check if it's quiet hours (22:00-08:00) — don't message at night */
+  private isQuietHours(): boolean {
+    const hour = new Date().getHours();
+    return hour >= 22 || hour < 8;
+  }
+
   /** Generate pending proactive messages */
   async checkForMessages(): Promise<ProactiveMessage[]> {
     if (!(await this.isAvailable())) return [];
     if (this.isSuppressed()) return [];
+    if (this.isQuietHours()) return [];
+
+    const backoff = this.getBackoffMultiplier();
+    if (backoff === 0) return []; // Too many ignored — stop until user initiates
 
     const messages: ProactiveMessage[] = [];
     const now = new Date();
 
-    // 1. Morning greeting (once per day, 7-10 AM)
+    // 1. Morning greeting (once per day, 7-10 AM, after 3+ days of use)
     const hour = now.getHours();
-    if (hour >= 7 && hour <= 10) {
+    const soul = await this.soul.getSoul();
+    const daysActive = (now.getTime() - new Date(soul.phaseStartedAt).getTime()) / (1000 * 60 * 60 * 24);
+    if (hour >= 7 && hour <= 10 && daysActive >= 3) {
       const today = now.toISOString().split('T')[0];
       if (this.state.lastGreeting !== today) {
         const greeting = await this.generateMorningGreeting();
@@ -129,19 +150,19 @@ export class ProactiveEngine {
     const tasks = await this.taskStore.getActive();
     const highPriority = tasks.filter(t => t.priority === 'high');
     if (highPriority.length > 0) {
-      const lastNudge = this.state.lastFollowUp
-        ? new Date(this.state.lastFollowUp)
+      const lastNudge = this.state.lastTaskNudge
+        ? new Date(this.state.lastTaskNudge)
         : new Date(0);
       const hoursSinceNudge = (now.getTime() - lastNudge.getTime()) / (1000 * 60 * 60);
 
-      if (hoursSinceNudge > 8) {
+      if (hoursSinceNudge > 8 * backoff) {
         const taskNames = highPriority.map(t => t.description).join(', ');
         messages.push({
           text: `Påminnelse: du har ${highPriority.length} viktig${highPriority.length > 1 ? 'e' : ''} oppgave${highPriority.length > 1 ? 'r' : ''}: ${taskNames}`,
           trigger: 'task_nudge',
           priority: 'medium',
         });
-        this.state.lastFollowUp = now.toISOString();
+        this.state.lastTaskNudge = now.toISOString();
       }
     }
 
@@ -158,7 +179,7 @@ export class ProactiveEngine {
           : new Date(0);
         const hoursSinceCheckIn = (now.getTime() - lastCheckIn.getTime()) / (1000 * 60 * 60);
 
-        if (hoursSinceLastMsg > silenceThreshold && hoursSinceCheckIn > silenceThreshold) {
+        if (hoursSinceLastMsg > silenceThreshold * backoff && hoursSinceCheckIn > silenceThreshold * backoff) {
           const checkIn = await this.generateCheckIn();
           if (checkIn) {
             messages.push({
@@ -199,7 +220,12 @@ export class ProactiveEngine {
     if (messages.length > 1) {
       const priorityOrder = { high: 3, medium: 2, low: 1 };
       messages.sort((a, b) => priorityOrder[b.priority] - priorityOrder[a.priority]);
+      this.recordProactiveSent();
       return [messages[0]];
+    }
+
+    if (messages.length === 1) {
+      this.recordProactiveSent();
     }
 
     return messages;
@@ -278,11 +304,11 @@ ${lang}`,
       if (facts.length < 10) return null; // Need enough facts to find connections
 
       // Only send insights occasionally (max once per 3 days)
-      const lastInsight = this.state.lastFollowUp
-        ? new Date(this.state.lastFollowUp)
+      const lastInsightTime = this.state.lastInsight
+        ? new Date(this.state.lastInsight)
         : new Date(0);
-      const daysSinceInsight = (Date.now() - lastInsight.getTime()) / (1000 * 60 * 60 * 24);
-      if (daysSinceInsight < 3) return null;
+      const daysSinceInsight = (Date.now() - lastInsightTime.getTime()) / (1000 * 60 * 60 * 24);
+      if (daysSinceInsight < 3 * this.getBackoffMultiplier()) return null;
 
       const lang = this.config.language === 'no' ? 'Write in Norwegian.' : 'Write in English.';
       const text = await generateCheapResponse({
@@ -304,6 +330,7 @@ Example: "Du snakker mye om prosjektet ditt i det siste. Virker som det betyr my
       });
 
       if (!text || text.trim().toUpperCase() === 'NONE') return null;
+      this.state.lastInsight = new Date().toISOString();
       return text;
     } catch {
       return null;
@@ -312,50 +339,32 @@ Example: "Du snakker mye om prosjektet ditt i det siste. Virker som det betyr my
 
   /** Search for interesting things related to user's interests */
   private async generateDiscovery(): Promise<string | null> {
-    try {
-      // Only search occasionally (max once per 2 days)
-      const lastDiscovery = this.state.lastDiscovery
-        ? new Date(this.state.lastDiscovery)
-        : new Date(0);
-      const daysSince = (Date.now() - lastDiscovery.getTime()) / (1000 * 60 * 60 * 24);
-      if (daysSince < 2) return null;
+    // TODO: Wire up to actual web_search tool — disabled because it was
+    // generating hallucinated "discoveries" without doing real searches
+    return null;
+  }
 
-      // Get facts about user interests
-      const facts = await this.memory.getRecentFacts(30);
-      if (facts.length < 5) return null; // Need enough context
+  /** Get backoff multiplier based on ignored messages */
+  private getBackoffMultiplier(): number {
+    const ignored = this.state.consecutiveIgnored;
+    if (ignored >= 10) return 0; // Stop entirely
+    if (ignored >= 6) return 4;
+    if (ignored >= 3) return 2;
+    return 1;
+  }
 
-      // Ask LLM to pick a search topic from known interests
-      const soul = await this.soul.getSoul();
-      const topicResponse = await generateCheapResponse({
-        prompt: `Based on these facts about your human, pick ONE specific topic to search for that they would genuinely find interesting. Pick something they care about, not something generic.
-
-Facts:
-${facts.map(f => `- ${f.subject} ${f.predicate} ${f.object}`).join('\n')}
-
-Respond with JUST the search query (3-6 words), nothing else. If no good topic exists, respond "NONE".`,
-      });
-
-      if (!topicResponse || topicResponse.trim().toUpperCase() === 'NONE') return null;
-      const searchTopic = topicResponse.trim();
-
-      // Use web search tool if available — for now generate a curated message
-      const text = await generateCheapResponse({
-        prompt: `You are ${soul.name}. You searched for "${searchTopic}" because you know your human is interested in this.
-
-Write a short message (1-3 sentences) sharing something interesting about this topic. Include a specific detail or angle they might not know. If you can reference a recent development, do that.
-
-Be natural, like a friend sharing something they found. Not a news report.
-Use Norwegian if the language preference is ${this.config.language}.
-
-Example: "Hei, jeg leste litt om [topic]. Visste du at [interesting thing]? Tenkte det var noe for deg."`,
-      });
-
-      if (!text) return null;
-      this.state.lastDiscovery = new Date().toISOString();
-      return text;
-    } catch {
-      return null;
+  /** Record that the user responded — resets backoff */
+  async recordUserResponse(): Promise<void> {
+    if (this.state.consecutiveIgnored > 0) {
+      this.state.consecutiveIgnored = 0;
+      await this.saveState();
     }
+  }
+
+  /** Record that a proactive message was sent */
+  private recordProactiveSent(): void {
+    this.state.proactivesSent++;
+    this.state.consecutiveIgnored++;
   }
 
   /** Suppress proactive messages for a duration */
