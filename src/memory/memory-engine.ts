@@ -10,6 +10,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { nanoid } from 'nanoid';
 import type { Fact, Entity, Conversation, Message } from '../core/types.js';
+import { EmbeddingEngine } from './embeddings.js';
 
 export interface AddFactInput {
   subject: string;
@@ -39,11 +40,15 @@ export class MemoryEngine {
   private facts: Fact[] = [];
   private entities: Map<string, Entity> = new Map();
 
+  // Semantic embeddings
+  private embeddings: EmbeddingEngine;
+
   constructor(dataDir: string) {
     this.dataDir = dataDir;
     this.factsDir = join(dataDir, 'facts');
     this.entitiesDir = join(dataDir, 'entities');
     this.conversationsDir = join(dataDir, 'conversations');
+    this.embeddings = new EmbeddingEngine(this.factsDir);
   }
 
   /** Initialize the memory system — create directories and load data */
@@ -59,8 +64,10 @@ export class MemoryEngine {
     await this.loadFacts();
     // Load entities
     await this.loadEntities();
+    // Load embeddings
+    await this.embeddings.loadFromDisk();
 
-    console.log(`[Mimir Memory] Loaded ${this.facts.length} facts, ${this.entities.size} entities`);
+    console.log(`[Mimir Memory] Loaded ${this.facts.length} facts, ${this.entities.size} entities, ${this.embeddings.count} embeddings`);
   }
 
   // ─── Fact Operations ───────────────────────────────────
@@ -96,6 +103,10 @@ export class MemoryEngine {
     this.preferencesCache = null;
     await this.persistFacts();
 
+    // Fire-and-forget embedding (don't block fact creation)
+    const factText = `${fact.subject} ${fact.predicate} ${fact.object}`;
+    this.embeddings.embedFact(fact.id, factText).catch(() => {});
+
     return fact;
   }
 
@@ -117,8 +128,15 @@ export class MemoryEngine {
     }
 
     if (count > 0) {
+      // Remove embeddings for invalidated facts
+      const invalidatedIds = this.facts
+        .filter(f => f.invalidAt !== null)
+        .map(f => f.id);
+      this.embeddings.removeEmbeddings(invalidatedIds);
+
       this.preferencesCache = null;
       await this.persistFacts();
+      await this.embeddings.saveToDisk();
       console.log(`[Mimir Memory] Invalidated ${count} facts matching "${query}"`);
     }
 
@@ -164,16 +182,17 @@ export class MemoryEngine {
   ]);
 
   /**
-   * Search facts by relevance to a query.
-   * Scoring: keyword match (0.5) + bigram match (0.2) + recency (0.2) + confidence (0.1)
-   * Filters stopwords, boosts subject matches, uses bigrams for phrase-level matching.
+   * Search facts by relevance to a query using hybrid scoring.
+   *
+   * With embeddings:  semantic×0.35 + keyword×0.30 + bigram×0.10 + recency×0.15 + confidence×0.10
+   * Without embeddings: keyword×0.50 + bigram×0.20 + recency×0.20 + confidence×0.10 (fallback)
    */
   async searchRelevantFacts(query: string, limit: number = 15): Promise<Fact[]> {
     const allWords = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
     const words = allWords.filter(w => !MemoryEngine.STOPWORDS.has(w));
     if (words.length === 0) return this.getRecentFacts(limit);
 
-    // Build bigrams for phrase matching ("feeling stressed" → "feeling stressed")
+    // Build bigrams for phrase matching
     const bigrams: string[] = [];
     for (let i = 0; i < words.length - 1; i++) {
       bigrams.push(`${words[i]} ${words[i + 1]}`);
@@ -183,29 +202,63 @@ export class MemoryEngine {
     const now = Date.now();
     const maxAge = 90 * 24 * 60 * 60 * 1000;
 
+    // Get query embedding (null if unavailable)
+    const queryVec = await this.embeddings.embed(query);
+    const useSemantic = queryVec !== null;
+
+    // Trigger background embedding of facts missing vectors
+    if (useSemantic) {
+      const missingFacts = validFacts
+        .filter(f => !this.embeddings.getEmbedding(f.id))
+        .map(f => ({ id: f.id, text: `${f.subject} ${f.predicate} ${f.object}` }));
+      if (missingFacts.length > 0) {
+        this.embeddings.embedMissing(missingFacts).catch(() => {});
+      }
+    }
+
+    // Scoring weights
+    const w = useSemantic
+      ? { semantic: 0.35, keyword: 0.30, bigram: 0.10, recency: 0.15, confidence: 0.10 }
+      : { semantic: 0, keyword: 0.50, bigram: 0.20, recency: 0.20, confidence: 0.10 };
+
     const scored = validFacts.map(f => {
       const fullText = `${f.subject} ${f.predicate} ${f.object} ${f.context || ''}`.toLowerCase();
       const subjectText = f.subject.toLowerCase();
 
-      // Keyword match (0.5) — bonus for subject matches
+      // Semantic similarity
+      let semanticScore = 0;
+      if (useSemantic) {
+        const factVec = this.embeddings.getEmbedding(f.id);
+        if (factVec) {
+          semanticScore = EmbeddingEngine.cosineSimilarity(queryVec, factVec);
+        }
+      }
+
+      // Keyword match — bonus for subject matches
       const matchCount = words.filter(w => fullText.includes(w)).length;
       const subjectMatches = words.filter(w => subjectText.includes(w)).length;
       const keywordScore = words.length > 0
         ? (matchCount + subjectMatches * 0.5) / (words.length * 1.5)
         : 0;
 
-      // Bigram match (0.2) — rewards phrase-level overlap
+      // Bigram match — rewards phrase-level overlap
       const bigramMatches = bigrams.filter(bg => fullText.includes(bg)).length;
       const bigramScore = bigrams.length > 0 ? bigramMatches / bigrams.length : 0;
 
-      // Recency (0.2)
+      // Recency
       const age = now - new Date(f.validAt).getTime();
       const recencyScore = Math.max(0, 1 - age / maxAge);
 
-      // Confidence boost (0.1) — prefer high-confidence facts
+      // Confidence
       const confidenceScore = f.confidence;
 
-      const total = keywordScore * 0.5 + bigramScore * 0.2 + recencyScore * 0.2 + confidenceScore * 0.1;
+      const total =
+        semanticScore * w.semantic +
+        keywordScore * w.keyword +
+        bigramScore * w.bigram +
+        recencyScore * w.recency +
+        confidenceScore * w.confidence;
+
       return { fact: f, score: total };
     });
 
@@ -254,25 +307,37 @@ export class MemoryEngine {
   }): Promise<number> {
     const before = this.facts.length;
 
+    const purgedIds: string[] = [];
     this.facts = this.facts.filter(fact => {
       const sub = fact.subject.toLowerCase();
       const pred = fact.predicate.toLowerCase();
       const obj = fact.object.toLowerCase();
 
-      if (filter.subjects && filter.subjects.test(sub)) return false;
-      if (filter.predicates && filter.predicates.test(pred)) return false;
-      if (filter.objects && filter.objects.test(obj)) return false;
+      if (filter.subjects && filter.subjects.test(sub)) { purgedIds.push(fact.id); return false; }
+      if (filter.predicates && filter.predicates.test(pred)) { purgedIds.push(fact.id); return false; }
+      if (filter.objects && filter.objects.test(obj)) { purgedIds.push(fact.id); return false; }
 
       return true;
     });
 
     const purged = before - this.facts.length;
     if (purged > 0) {
+      this.embeddings.removeEmbeddings(purgedIds);
       await this.persistFacts();
+      await this.embeddings.saveToDisk();
       console.log(`[Mimir Memory] Purged ${purged} junk facts (${this.facts.length} remaining)`);
     }
 
     return purged;
+  }
+
+  /** Rebuild all embeddings from scratch */
+  async rebuildEmbeddings(): Promise<number> {
+    const validFacts = this.facts
+      .filter(f => f.invalidAt === null)
+      .map(f => ({ id: f.id, text: `${f.subject} ${f.predicate} ${f.object}` }));
+    const count = await this.embeddings.embedMissing(validFacts);
+    return count;
   }
 
   // ─── Entity Operations ─────────────────────────────────

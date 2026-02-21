@@ -101,6 +101,25 @@ describe('MemoryEngine', () => {
       expect(facts.length).toBe(1);
     });
 
+    it('should search relevant facts without embeddings (fallback)', async () => {
+      await memory.addFact({ subject: 'Andy', predicate: 'refactors when', object: 'blocked', source: 'conversation' });
+      await memory.addFact({ subject: 'Andy', predicate: 'likes', object: 'TypeScript', source: 'conversation' });
+      await memory.addFact({ subject: 'Andy', predicate: 'works on', object: 'Mimir project', source: 'conversation' });
+
+      // Keyword fallback should still find results
+      const results = await memory.searchRelevantFacts('Andy blocked');
+      expect(results.length).toBeGreaterThan(0);
+      // The "blocked" fact should rank highest
+      expect(results[0].object).toBe('blocked');
+    });
+
+    it('rebuildEmbeddings should not crash when model is unavailable', async () => {
+      await memory.addFact({ subject: 'Test', predicate: 'is', object: 'fact', source: 'conversation' });
+      // Should return 0 (model unavailable in test env) without throwing
+      const count = await memory.rebuildEmbeddings();
+      expect(count).toBeGreaterThanOrEqual(0);
+    });
+
     it('should return recent facts sorted by time', async () => {
       await memory.addFact({ subject: 'A', predicate: 'is', object: 'first', source: 'conversation' });
       // tiny delay so timestamps differ
